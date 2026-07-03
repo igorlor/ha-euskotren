@@ -29,6 +29,7 @@ _LOGGER = logging.getLogger(__name__)
 
 DEFAULT_NAME = "Euskotren Next Trains"
 
+
 DEFAULT_GTFSRT_URL = (
     "https://opendata.euskadi.eus/transport/moveuskadi/"
     "euskotren/gtfsrt_euskotren_trip_updates.pb"
@@ -41,8 +42,13 @@ DEFAULT_GTFS_STATIC_URL = (
 
 DEFAULT_GTFS_REFRESH_HOURS = 24
 
+CONF_GTFS_DIR = "gtfs_dir"
+CONF_STOP_NAME = "stop_name"
+CONF_DIRECTION = "direction"
+CONF_GTFSRT_URL = "gtfsrt_url"
 CONF_GTFS_STATIC_URL = "gtfs_static_url"
 CONF_GTFS_REFRESH_HOURS = "gtfs_refresh_hours"
+CONF_MAX_TRAINS = "max_trains"
 
 REQUIRED_GTFS_FILES = [
     "routes.txt",
@@ -52,12 +58,6 @@ REQUIRED_GTFS_FILES = [
 ]
 
 LOCAL_TZ = ZoneInfo("Europe/Madrid")
-
-CONF_GTFS_DIR = "gtfs_dir"
-CONF_STOP_NAME = "stop_name"
-CONF_DIRECTION = "direction"
-CONF_GTFSRT_URL = "gtfsrt_url"
-CONF_MAX_TRAINS = "max_trains"
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
     {
