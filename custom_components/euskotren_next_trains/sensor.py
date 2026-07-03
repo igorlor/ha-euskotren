@@ -1,11 +1,18 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+
+import io
+import json
+import shutil
+import tempfile
+import urllib.request
+import zipfile
 import csv
 import logging
 import os
 import unicodedata
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import async_timeout
@@ -27,6 +34,23 @@ DEFAULT_GTFSRT_URL = (
     "euskotren/gtfsrt_euskotren_trip_updates.pb"
 )
 
+DEFAULT_GTFS_STATIC_URL = (
+    "ftp://ftp.geo.euskadi.net/cartografia/Transporte/"
+    "Moveuskadi/Euskotren/google_transit.zip"
+)
+
+DEFAULT_GTFS_REFRESH_HOURS = 24
+
+CONF_GTFS_STATIC_URL = "gtfs_static_url"
+CONF_GTFS_REFRESH_HOURS = "gtfs_refresh_hours"
+
+REQUIRED_GTFS_FILES = [
+    "routes.txt",
+    "trips.txt",
+    "stops.txt",
+    "stop_times.txt",
+]
+
 LOCAL_TZ = ZoneInfo("Europe/Madrid")
 
 CONF_GTFS_DIR = "gtfs_dir"
@@ -41,7 +65,11 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
         vol.Required(CONF_GTFS_DIR): cv.string,
         vol.Required(CONF_STOP_NAME): cv.string,
         vol.Required(CONF_DIRECTION): cv.string,
-        vol.Optional(CONF_GTFSRT_URL, default=DEFAULT_GTFSRT_URL): cv.string,
+        vol.Optional(CONF_GTFS_STATIC_URL, default=DEFAULT_GTFS_STATIC_URL): cv.string,
+        vol.Optional(
+            CONF_GTFS_REFRESH_HOURS,
+            default=DEFAULT_GTFS_REFRESH_HOURS
+        ): cv.positive_int,
         vol.Optional(CONF_MAX_TRAINS, default=5): cv.positive_int,
         vol.Optional(CONF_SCAN_INTERVAL): cv.time_period,
     }
@@ -97,6 +125,188 @@ def build_stop_times_lookup(stop_times_rows):
 
     return lookup
 
+def gtfs_files_exist(gtfs_dir):
+    """
+    Comprueba si existen los ficheros GTFS mínimos necesarios.
+    """
+    for filename in REQUIRED_GTFS_FILES:
+        path = os.path.join(gtfs_dir, filename)
+        if not os.path.exists(path):
+            return False
+    return True
+
+
+def get_gtfs_metadata_path(gtfs_dir):
+    return os.path.join(gtfs_dir, ".euskotren_gtfs_metadata.json")
+
+
+def read_gtfs_metadata(gtfs_dir):
+    metadata_path = get_gtfs_metadata_path(gtfs_dir)
+
+    if not os.path.exists(metadata_path):
+        return {}
+
+    try:
+        with open(metadata_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def write_gtfs_metadata(gtfs_dir, url):
+    metadata_path = get_gtfs_metadata_path(gtfs_dir)
+
+    metadata = {
+        "url": url,
+        "downloaded_at": datetime.now(LOCAL_TZ).isoformat(),
+    }
+
+    with open(metadata_path, "w", encoding="utf-8") as f:
+        json.dump(metadata, f, indent=2)
+
+
+def gtfs_is_expired(gtfs_dir, refresh_hours):
+    """
+    Devuelve True si el GTFS estático debe actualizarse.
+    """
+    metadata = read_gtfs_metadata(gtfs_dir)
+
+    downloaded_at = metadata.get("downloaded_at")
+    if not downloaded_at:
+        return True
+
+    try:
+        downloaded_dt = datetime.fromisoformat(downloaded_at)
+    except Exception:
+        return True
+
+    age = datetime.now(LOCAL_TZ) - downloaded_dt
+
+    return age > timedelta(hours=refresh_hours)
+
+
+def download_url_sync(url, timeout=90):
+    """
+    Descarga HTTP/HTTPS/FTP en modo síncrono.
+
+    Se ejecutará dentro de async_add_executor_job para no bloquear
+    el event loop de Home Assistant.
+    """
+    _LOGGER.info("Descargando GTFS estático desde %s", url)
+
+    headers = {
+        "User-Agent": "HomeAssistant EuskotrenNextTrains/0.1",
+        "Accept": "application/zip,application/octet-stream,*/*",
+        "Referer": "https://www.euskadi.eus/",
+    }
+
+    request = urllib.request.Request(url, headers=headers)
+
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        data = response.read()
+
+    _LOGGER.info("Descargados %s bytes desde %s", len(data), url)
+
+    return data
+
+
+def validate_gtfs_zip(zip_path):
+    """
+    Comprueba que el ZIP contiene los ficheros GTFS mínimos.
+    """
+    with zipfile.ZipFile(zip_path, "r") as z:
+        names = set(z.namelist())
+
+        missing = []
+
+        for required_file in REQUIRED_GTFS_FILES:
+            if required_file not in names:
+                missing.append(required_file)
+
+        if missing:
+            raise RuntimeError(
+                "El ZIP GTFS no contiene los ficheros requeridos: "
+                + ", ".join(missing)
+            )
+
+
+def extract_gtfs_zip_atomic(zip_data, target_dir):
+    """
+    Extrae el GTFS de forma más segura:
+    - crea directorio temporal
+    - valida ZIP
+    - extrae
+    - sustituye contenido final
+    """
+    parent_dir = os.path.dirname(target_dir)
+    os.makedirs(parent_dir, exist_ok=True)
+
+    with tempfile.TemporaryDirectory(dir=parent_dir) as tmp_dir:
+        zip_path = os.path.join(tmp_dir, "gtfs.zip")
+        extract_dir = os.path.join(tmp_dir, "extract")
+
+        os.makedirs(extract_dir, exist_ok=True)
+
+        with open(zip_path, "wb") as f:
+            f.write(zip_data)
+
+        validate_gtfs_zip(zip_path)
+
+        with zipfile.ZipFile(zip_path, "r") as z:
+            z.extractall(extract_dir)
+
+        os.makedirs(target_dir, exist_ok=True)
+
+        for filename in os.listdir(target_dir):
+            path = os.path.join(target_dir, filename)
+            if os.path.isdir(path):
+                shutil.rmtree(path)
+            else:
+                os.remove(path)
+
+        for filename in os.listdir(extract_dir):
+            src = os.path.join(extract_dir, filename)
+            dst = os.path.join(target_dir, filename)
+            shutil.move(src, dst)
+
+
+def ensure_static_gtfs(gtfs_dir, gtfs_static_url, refresh_hours):
+    """
+    Garantiza que existe un GTFS estático local y actualizado.
+    Esta función es síncrona y debe llamarse desde executor_job.
+    """
+    os.makedirs(gtfs_dir, exist_ok=True)
+
+    must_download = False
+
+    if not gtfs_files_exist(gtfs_dir):
+        _LOGGER.info(
+            "No existen todos los ficheros GTFS requeridos en %s",
+            gtfs_dir
+        )
+        must_download = True
+    elif gtfs_is_expired(gtfs_dir, refresh_hours):
+        _LOGGER.info(
+            "GTFS estático expirado. Se actualizará. Directorio: %s",
+            gtfs_dir
+        )
+        must_download = True
+    else:
+        _LOGGER.info(
+            "GTFS estático local válido. Se reutiliza: %s",
+            gtfs_dir
+        )
+
+    if not must_download:
+        return
+
+    zip_data = download_url_sync(gtfs_static_url)
+
+    extract_gtfs_zip_atomic(zip_data, gtfs_dir)
+
+    write_gtfs_metadata(gtfs_dir, gtfs_static_url)
+
+    _LOGGER.info("GTFS estático actualizado correctamente en %s", gtfs_dir)
 
 def load_static_gtfs(gtfs_dir):
     _LOGGER.info("Cargando GTFS estático desde %s", gtfs_dir)
@@ -300,11 +510,24 @@ def find_next_trains(feed, static_gtfs, target_stop_ids, direction, limit):
 
 async def async_setup_platform(hass, config, async_add_entities, discovery_info=None):
     name = config[CONF_NAME]
-    gtfs_dir = config[CONF_GTFS_DIR]
+
+    gtfs_dir = config.get(CONF_GTFS_DIR)
+    if not gtfs_dir:
+        gtfs_dir = hass.config.path("euskotren_gtfs")
+
     stop_name = config[CONF_STOP_NAME]
     direction = config[CONF_DIRECTION]
     gtfsrt_url = config[CONF_GTFSRT_URL]
+    gtfs_static_url = config[CONF_GTFS_STATIC_URL]
+    gtfs_refresh_hours = config[CONF_GTFS_REFRESH_HOURS]
     max_trains = config[CONF_MAX_TRAINS]
+
+    await hass.async_add_executor_job(
+        ensure_static_gtfs,
+        gtfs_dir,
+        gtfs_static_url,
+        gtfs_refresh_hours,
+    )
 
     static_gtfs = await hass.async_add_executor_job(load_static_gtfs, gtfs_dir)
 
@@ -331,7 +554,6 @@ async def async_setup_platform(hass, config, async_add_entities, discovery_info=
         ],
         True,
     )
-
 
 class EuskotrenNextTrainsSensor(SensorEntity):
     def __init__(
