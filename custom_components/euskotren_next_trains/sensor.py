@@ -62,9 +62,10 @@ CONF_MAX_TRAINS = "max_trains"
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
     {
         vol.Optional(CONF_NAME, default=DEFAULT_NAME): cv.string,
-        vol.Required(CONF_GTFS_DIR): cv.string,
+        vol.Optional(CONF_GTFS_DIR): cv.string,
         vol.Required(CONF_STOP_NAME): cv.string,
         vol.Required(CONF_DIRECTION): cv.string,
+        vol.Optional(CONF_GTFSRT_URL, default=DEFAULT_GTFSRT_URL): cv.string,
         vol.Optional(CONF_GTFS_STATIC_URL, default=DEFAULT_GTFS_STATIC_URL): cv.string,
         vol.Optional(
             CONF_GTFS_REFRESH_HOURS,
@@ -514,6 +515,15 @@ async def async_setup_platform(hass, config, async_add_entities, discovery_info=
     gtfs_dir = config.get(CONF_GTFS_DIR)
     if not gtfs_dir:
         gtfs_dir = hass.config.path("euskotren_gtfs")
+    
+    await hass.async_add_executor_job(
+        ensure_static_gtfs,
+        gtfs_dir,
+        gtfs_static_url,
+        gtfs_refresh_hours,
+    )
+    
+    static_gtfs = await hass.async_add_executor_job(load_static_gtfs, gtfs_dir)
 
     stop_name = config[CONF_STOP_NAME]
     direction = config[CONF_DIRECTION]
@@ -521,15 +531,6 @@ async def async_setup_platform(hass, config, async_add_entities, discovery_info=
     gtfs_static_url = config[CONF_GTFS_STATIC_URL]
     gtfs_refresh_hours = config[CONF_GTFS_REFRESH_HOURS]
     max_trains = config[CONF_MAX_TRAINS]
-
-    await hass.async_add_executor_job(
-        ensure_static_gtfs,
-        gtfs_dir,
-        gtfs_static_url,
-        gtfs_refresh_hours,
-    )
-
-    static_gtfs = await hass.async_add_executor_job(load_static_gtfs, gtfs_dir)
 
     stop_matches = find_stop_ids_by_name(static_gtfs, stop_name)
 
