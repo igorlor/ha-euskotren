@@ -1,0 +1,12 @@
+{
+  "domain": "euskotren_next_trains",
+  "name": "Euskotren Next Trains",
+  "version": "0.1.0",
+  "documentation": "https://www.euskotren.eus/",
+  "requirements": [
+    "gtfs-realtime-bindings==1.0.0"
+  ],
+  "dependencies": [],
+  "codeowners": [],
+  "iot_class": "cloud_polling"
+}

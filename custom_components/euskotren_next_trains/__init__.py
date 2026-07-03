@@ -1,0 +1,1 @@
+"""Euskotren Next Trains custom integration."""
