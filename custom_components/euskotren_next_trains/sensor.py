@@ -509,33 +509,50 @@ def find_next_trains(feed, static_gtfs, target_stop_ids, direction, limit):
     return results[:limit]
 
 
+
 async def async_setup_platform(hass, config, async_add_entities, discovery_info=None):
-    name = config[CONF_NAME]
+    name = config.get(CONF_NAME, DEFAULT_NAME)
 
     gtfs_dir = config.get(CONF_GTFS_DIR)
     if not gtfs_dir:
         gtfs_dir = hass.config.path("euskotren_gtfs")
-    
+
+    stop_name = config[CONF_STOP_NAME]
+    direction = config[CONF_DIRECTION]
+
+    gtfsrt_url = config.get(CONF_GTFSRT_URL, DEFAULT_GTFSRT_URL)
+
+    gtfs_static_url = config.get(
+        CONF_GTFS_STATIC_URL,
+        DEFAULT_GTFS_STATIC_URL
+    )
+
+    gtfs_refresh_hours = config.get(
+        CONF_GTFS_REFRESH_HOURS,
+        DEFAULT_GTFS_REFRESH_HOURS
+    )
+
+    max_trains = config.get(CONF_MAX_TRAINS, 5)
+
     await hass.async_add_executor_job(
         ensure_static_gtfs,
         gtfs_dir,
         gtfs_static_url,
         gtfs_refresh_hours,
     )
-    
-    static_gtfs = await hass.async_add_executor_job(load_static_gtfs, gtfs_dir)
 
-    stop_name = config[CONF_STOP_NAME]
-    direction = config[CONF_DIRECTION]
-    gtfsrt_url = config[CONF_GTFSRT_URL]
-    gtfs_static_url = config[CONF_GTFS_STATIC_URL]
-    gtfs_refresh_hours = config[CONF_GTFS_REFRESH_HOURS]
-    max_trains = config[CONF_MAX_TRAINS]
+    static_gtfs = await hass.async_add_executor_job(
+        load_static_gtfs,
+        gtfs_dir
+    )
 
     stop_matches = find_stop_ids_by_name(static_gtfs, stop_name)
 
     if not stop_matches:
-        _LOGGER.error("No se ha encontrado ninguna parada con nombre: %s", stop_name)
+        _LOGGER.error(
+            "No se ha encontrado ninguna parada con nombre: %s",
+            stop_name
+        )
         return
 
     session = async_get_clientsession(hass)
