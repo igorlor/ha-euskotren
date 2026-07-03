@@ -1,12 +1,16 @@
+
 {
   "domain": "euskotren_next_trains",
   "name": "Euskotren Next Trains",
   "version": "0.1.0",
-  "documentation": "https://www.euskotren.eus/",
+  "documentation": "https://github.com/igorlor/ha-euskotren-next-trains",
+  "issue_tracker": "https://github.com/igorlor/ha-euskotren-next-trains/issues",
+  "codeowners": [
+    "@igorlor"
+  ],
   "requirements": [
     "gtfs-realtime-bindings==1.0.0"
   ],
   "dependencies": [],
-  "codeowners": [],
   "iot_class": "cloud_polling"
 }
